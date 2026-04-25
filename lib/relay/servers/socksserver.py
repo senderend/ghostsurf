@@ -22,6 +22,7 @@ from __future__ import division
 from __future__ import print_function
 import socketserver
 import socket
+import select
 import time
 import logging
 from queue import Queue
@@ -361,22 +362,8 @@ class SocksRequestHandler(socketserver.BaseRequestHandler):
 
         LOG.debug('SOCKS: Target is %s(%s)' % (self.targetHost, self.targetPort))
 
-        if self.targetPort != 53:
-            # Do we have an active connection for the target host/port asked?
-            # Still don't know the username, but it's a start
-            if self.targetHost in self.__socksServer.activeRelays:
-                if self.targetPort not in self.__socksServer.activeRelays[self.targetHost]:
-                    LOG.error('SOCKS: Don\'t have a relay for %s(%s)' % (self.targetHost, self.targetPort))
-                    self.sendReplyError(replyField.CONNECTION_REFUSED)
-                    return
-            else:
-                LOG.error('SOCKS: Don\'t have a relay for %s(%s)' % (self.targetHost, self.targetPort))
-                self.sendReplyError(replyField.CONNECTION_REFUSED)
-                return
-
-        # Now let's get into the loops
+        # DNS requests get a direct passthrough
         if self.targetPort == 53:
-            # Somebody wanting a DNS request. Should we handle this?
             s = socket.socket()
             try:
                 LOG.debug('SOCKS: Connecting to %s(%s)' %(self.targetHost, self.targetPort))
@@ -469,7 +456,48 @@ class SocksRequestHandler(socketserver.BaseRequestHandler):
             if relay.username is not None:
                 self.__socksServer.activeRelays[self.targetHost][self.targetPort][relay.username]['inUse'] = False
         else:
-            LOG.error('SOCKS: I don\'t have a handler for this port')
+            # No relay session — forward directly to the target
+            LOG.debug('SOCKS: No relay for %s(%s), forwarding directly' % (self.targetHost, self.targetPort))
+            s = socket.socket()
+            try:
+                s.connect((self.targetHost, self.targetPort))
+            except Exception as e:
+                LOG.debug("Exception:", exc_info=True)
+                LOG.error('SOCKS: %s' % str(e))
+                s.close()
+                self.sendReplyError(replyField.CONNECTION_REFUSED)
+                return
+
+            try:
+                if self.__socksVersion == 5:
+                    reply = SOCKS5_REPLY()
+                    reply['REP'] = replyField.SUCCEEDED.value
+                    addr, port = s.getsockname()
+                    reply['PAYLOAD'] = socket.inet_aton(addr) + pack('>H', port)
+                else:
+                    reply = SOCKS4_REPLY()
+                self.__connSocket.sendall(reply.getData())
+
+                while True:
+                    try:
+                        readable, _, _ = select.select([self.__connSocket, s], [], [], 60)
+                        if not readable:
+                            break
+                        for sock in readable:
+                            data = sock.recv(8192)
+                            if not data:
+                                return
+                            if sock is self.__connSocket:
+                                s.sendall(data)
+                            else:
+                                self.__connSocket.sendall(data)
+                    except Exception as e:
+                        LOG.debug("Exception:", exc_info=True)
+                        LOG.debug('SOCKS: %s' % str(e))
+                        break
+            finally:
+                s.close()
+            return
 
         LOG.debug('SOCKS: Shutting down connection')
         try:

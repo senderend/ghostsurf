@@ -599,6 +599,44 @@ class HTTPSocksRelay(SocksRelay):
         relayClient = self.activeRelays[self.username]['protocolClient']
         return relayClient.serverConfig.kernelAuth
 
+    def _sendBrowserError(self, code, reason):
+        try:
+            msg = ('HTTP/1.1 %d %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n' % (code, reason)).encode()
+            self.socksSocket.sendall(msg)
+        except Exception:
+            pass
+
+    def _sendViaRelay(self, tosend, socketLock, protocol):
+        """Acquire the relay lock, forward the request, transfer the response.
+        On lock-acquire timeout: 503 to browser, session left intact.
+        On relay socket timeout/error: 504 to browser, relay socket killed so
+        future connections fail isConnectionAlive cleanly instead of reading
+        stale response data."""
+        if not socketLock.acquire(timeout=15):
+            LOG.error('%s: Lock timeout waiting for relay socket (%s)' % (protocol, self.username))
+            self._sendBrowserError(503, 'Service Unavailable')
+            return False
+        try:
+            try:
+                self.relaySocket.settimeout(10)
+                self.relaySocket.sendall(tosend)
+                self.transferResponse()
+                return True
+            except (socket.timeout, ConnectionResetError, BrokenPipeError, OSError) as e:
+                LOG.error('%s: Relay socket error, killing session: %s' % (protocol, str(e)))
+                self._sendBrowserError(504, 'Gateway Timeout')
+                try:
+                    self.relaySocket.close()
+                except Exception:
+                    pass
+                return False
+        finally:
+            try:
+                self.relaySocket.settimeout(None)
+            except Exception:
+                pass
+            socketLock.release()
+
     def _processRequestWithProbe(self, buffer, socketLock, protocol='HTTP'):
         """
         Process request with try-anonymous-first, fallback-to-auth strategy.
@@ -607,10 +645,8 @@ class HTTPSocksRelay(SocksRelay):
         """
         if not self.shouldProbeAnonymous():
             # Kernel auth mode not enabled, use authenticated relay normally
-            with socketLock:
-                tosend = self.prepareRequest(buffer)
-                self.relaySocket.sendall(tosend)
-                self.transferResponse()
+            tosend = self.prepareRequest(buffer)
+            self._sendViaRelay(tosend, socketLock, protocol)
             return
 
         relayClient = self.activeRelays[self.username]['protocolClient']
@@ -625,9 +661,7 @@ class HTTPSocksRelay(SocksRelay):
         if cache_key in authCache and authCache[cache_key]:
             # Cached as needs auth - use authenticated relay directly
             LOG.debug('%s: Cache HIT (auth) %s' % (protocol, path))
-            with socketLock:
-                self.relaySocket.sendall(tosend)
-                self.transferResponse()
+            self._sendViaRelay(tosend, socketLock, protocol)
             return
 
         # Try anonymous connection
@@ -640,9 +674,7 @@ class HTTPSocksRelay(SocksRelay):
             anonConn.connect()
         except Exception as e:
             LOG.error('%s: Anon connection failed: %s, using auth relay' % (protocol, str(e)))
-            with socketLock:
-                self.relaySocket.sendall(tosend)
-                self.transferResponse()
+            self._sendViaRelay(tosend, socketLock, protocol)
             return
 
         try:
@@ -658,9 +690,7 @@ class HTTPSocksRelay(SocksRelay):
                     anonConn.close()
                 except Exception:
                     pass
-                with socketLock:
-                    self.relaySocket.sendall(tosend)
-                    self.transferResponse()
+                self._sendViaRelay(tosend, socketLock, protocol)
                 return
 
             # Decision: is it a 401?
@@ -673,9 +703,7 @@ class HTTPSocksRelay(SocksRelay):
                 except Exception:
                     pass
 
-                with socketLock:
-                    self.relaySocket.sendall(tosend)
-                    self.transferResponse()
+                self._sendViaRelay(tosend, socketLock, protocol)
             else:
                 # Success - forward response with initial data we already read
                 LOG.debug('%s: Path %s OK anonymously (cached)' % (protocol, path))
@@ -696,9 +724,7 @@ class HTTPSocksRelay(SocksRelay):
                 anonConn.close()
             except Exception:
                 pass
-            with socketLock:
-                self.relaySocket.sendall(tosend)
-                self.transferResponse()
+            self._sendViaRelay(tosend, socketLock, protocol)
 
     def prepareRequest(self, data):
         # Parse the HTTP data, removing headers that break stuff
