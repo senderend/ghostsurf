@@ -736,15 +736,14 @@ class HTTPSocksRelay(SocksRelay):
             response.append(part)
         # Append the body
         response.append(b'')
-        body_parts = data.split(EOL+EOL)
-        if len(body_parts) > 1:
-            response.append(body_parts[1])
+        headerSize = data.find(EOL+EOL)
+        if headerSize != -1:
+            response.append(data[headerSize + 4:])
         else:
             response.append(b'')  # No body for GET requests
         senddata = EOL.join(response)
 
         # Check if the body is larger than 1 packet
-        headerSize = data.find(EOL+EOL)
         headers = self.getHeaders(data)
         try:
             bodySize = int(headers.get('content-length', 0))

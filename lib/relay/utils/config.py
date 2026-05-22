@@ -49,6 +49,7 @@ class NTLMRelayxConfig:
         self.dumpHashes = False
         self.SMBServerChallenge = None
         self.remove_mic = False
+        self.remove_target = False
 
     def setSMB2Support(self, value):
         self.smb2support = value
