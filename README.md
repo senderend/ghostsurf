@@ -168,6 +168,16 @@ lets you interact with the application as the victim user and understand what's 
 which lowers the barrier for developing targeted attack modules against apps that would otherwise
 be hard to reverse-engineer.
 
+## Testing
+
+`tests/smoke_test.py` runs ghostsurf against a fake IWA site on localhost, sends NTLM auth into
+the HTTP, SMB, RAW and RPC listeners, and checks that each session relays and serves a page
+through the SOCKS proxy. It needs no root or network:
+
+```bash
+venv/bin/python tests/smoke_test.py
+```
+
 ## Caveats
 
 ghostsurf funnels all browser requests through a single authenticated TCP connection. Performance
