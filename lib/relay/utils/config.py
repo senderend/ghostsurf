@@ -50,6 +50,12 @@ class NTLMRelayxConfig:
         self.SMBServerChallenge = None
         self.remove_mic = False
 
+        # Read by impacket's HTTP, WCF, RAW and RPC relay servers. Without remove_target,
+        # every relay into those listeners dies with AttributeError after the target's
+        # CHALLENGE. serve_wpad is checked when a client requests /wpad.dat.
+        self.remove_target = False
+        self.serve_wpad = False
+
     def setSMB2Support(self, value):
         self.smb2support = value
 
