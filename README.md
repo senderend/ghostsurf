@@ -58,8 +58,23 @@ Servers:
   --no-http-server         Disable HTTP capture server
   --no-wcf-server          Disable WCF capture server
   --no-raw-server          Disable RAW capture server
+  --no-rpc-server          Disable RPC capture server
   --smb1                   Use SMB1 only (SMB2 is default)
 ```
+
+### Listeners
+
+All listeners relay into the HTTP(S) target, so SMB signing on the source host doesn't matter.
+
+| Listener | Default port | Catches |
+|----------|--------------|---------|
+| SMB      | 445          | Coerced machine auth over SMB (wspcoerce, DFSCoerce, PrinterBug on older builds) and poisoned or phished users |
+| HTTP     | 80           | Browsers and other HTTP clients authenticating to a name in the intranet zone |
+| RPC      | 135          | PrinterBug callbacks from Windows 11 22H2+ and Server 2025, which only call back over raw DCERPC |
+| WCF      | 9389         | net.tcp clients such as the AD PowerShell module talking to ADWS |
+| RAW      | 6666         | NTLM forwarded by [lsarelayx](https://github.com/CCob/lsarelayx) |
+
+Ports below 1024 need root.
 
 ### Attack Flow
 
@@ -152,6 +167,16 @@ difficult to reverse from packet captures alone. Proxying a browser through the 
 lets you interact with the application as the victim user and understand what's actually there,
 which lowers the barrier for developing targeted attack modules against apps that would otherwise
 be hard to reverse-engineer.
+
+## Testing
+
+`tests/smoke_test.py` runs ghostsurf against a fake IWA site on localhost, sends NTLM auth into
+the HTTP, SMB, RAW and RPC listeners, and checks that each session relays and serves a page
+through the SOCKS proxy. It needs no root or network:
+
+```bash
+venv/bin/python tests/smoke_test.py
+```
 
 ## Caveats
 

