@@ -58,8 +58,23 @@ Servers:
   --no-http-server         Disable HTTP capture server
   --no-wcf-server          Disable WCF capture server
   --no-raw-server          Disable RAW capture server
+  --no-rpc-server          Disable RPC capture server
   --smb1                   Use SMB1 only (SMB2 is default)
 ```
+
+### Listeners
+
+All listeners relay into the HTTP(S) target, so SMB signing on the source host doesn't matter.
+
+| Listener | Default port | Catches |
+|----------|--------------|---------|
+| SMB      | 445          | Coerced machine auth over SMB (wspcoerce, DFSCoerce, PrinterBug on older builds) and poisoned or phished users |
+| HTTP     | 80           | Browsers and other HTTP clients authenticating to a name in the intranet zone |
+| RPC      | 135          | PrinterBug callbacks from Windows 11 22H2+ and Server 2025, which only call back over raw DCERPC |
+| WCF      | 9389         | net.tcp clients such as the AD PowerShell module talking to ADWS |
+| RAW      | 6666         | NTLM forwarded by [lsarelayx](https://github.com/CCob/lsarelayx) |
+
+Ports below 1024 need root.
 
 ### Attack Flow
 
